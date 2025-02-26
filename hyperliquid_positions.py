@@ -33,6 +33,15 @@ class HyperliquidPositionTracker(HyperliquidAPI):
             'max_correlation': 0.7           # Maximum correlation between positions
         }
 
+    def _safe_float(self, value, default=0.0):
+        """Safely convert value to float, returning default if conversion fails"""
+        try:
+            if value is None:
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     def get_user_positions(self, wallet_address: str) -> List[HyperliquidPosition]:
         """
         Fetch all open positions for a given wallet address
@@ -64,23 +73,23 @@ class HyperliquidPositionTracker(HyperliquidAPI):
                         coin = position_data.get('coin', '')
                         
                         # Get size from szi (size information)
-                        size = float(position_data.get('szi', 0))
+                        size = self._safe_float(position_data.get('szi', 0))
                         if size == 0:
                             continue
 
                         # Determine side based on szi value
                         side = 'short' if size < 0 else 'long'
                         
-                        # Get leverage value from the leverage object
+                        # Get leverage value safely
                         leverage_data = position_data.get('leverage', {})
-                        leverage = float(leverage_data.get('value', 0)) if isinstance(leverage_data, dict) else 0
+                        leverage = self._safe_float(leverage_data.get('value', 0)) if isinstance(leverage_data, dict) else 0
                         
-                        # Get other position details including realized PnL
-                        entry_price = float(position_data.get('entryPx', 0))
-                        liquidation_price = float(position_data.get('liquidationPx', 0))
-                        margin_used = float(position_data.get('marginUsed', 0))
-                        unrealized_pnl = float(position_data.get('unrealizedPnl', 0))
-                        realized_pnl = float(position_data.get('realizedPnl', 0))  # Add realized PnL
+                        # Get other position details with safe conversion
+                        entry_price = self._safe_float(position_data.get('entryPx'))
+                        liquidation_price = self._safe_float(position_data.get('liquidationPx'))
+                        margin_used = self._safe_float(position_data.get('marginUsed'))
+                        unrealized_pnl = self._safe_float(position_data.get('unrealizedPnl'))
+                        realized_pnl = self._safe_float(position_data.get('realizedPnl'))
 
                         positions.append(HyperliquidPosition(
                             coin=coin,
@@ -90,11 +99,11 @@ class HyperliquidPositionTracker(HyperliquidAPI):
                             entry_price=entry_price,
                             liquidation_price=liquidation_price,
                             unrealized_pnl=unrealized_pnl,
-                            realized_pnl=realized_pnl,  # Add realized PnL
+                            realized_pnl=realized_pnl,
                             margin_used=margin_used,
                             timestamp=datetime.fromtimestamp(response.get('time', 0) / 1000)
                         ))
-                    except (KeyError, ValueError, TypeError) as e:
+                    except Exception as e:
                         print(f"Warning: Failed to parse position for {coin}: {str(e)}")
                         continue
             
