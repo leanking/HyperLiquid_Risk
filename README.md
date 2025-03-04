@@ -9,7 +9,10 @@ A real-time risk monitoring and analytics dashboard for Hyperliquid positions wi
 - Historical data logging with Supabase
 - Interactive dark-mode charts
 - Position and portfolio analytics
-- Closed trade tracking
+- 7-day realized PnL tracking
+- Rate-limited data logging
+- Timezone-aware data handling
+- Cached API requests for better performance
 
 ## Risk Metrics
 
@@ -27,7 +30,7 @@ A real-time risk monitoring and analytics dashboard for Hyperliquid positions wi
 - Risk Score (0-100)
 - Individual Position Leverage
 - Unrealized PnL
-- Realized PnL
+- 7-Day Realized PnL
 - Total PnL (including closed trades)
 
 ## Installation
@@ -41,6 +44,13 @@ pip install -r requirements.txt
 ```env
 SUPABASE_URL=your_supabase_url
 SUPABASE_KEY=your_supabase_key
+```
+
+3. Install Watchdog for better performance (optional):
+```bash
+# On macOS
+xcode-select --install
+pip install watchdog
 ```
 
 ## Usage
@@ -59,19 +69,23 @@ Create the following tables in Supabase:
 ```sql
 -- Position history table
 create table position_history (
+    id bigint primary key generated always as identity,
     timestamp timestamptz not null,
     coin text not null,
     side text not null,
     size numeric not null,
     entry_price numeric not null,
+    leverage numeric,
+    liquidation_price numeric,
     unrealized_pnl numeric not null,
     realized_pnl numeric not null,
-    primary key (timestamp, coin)
+    margin_used numeric
 );
 
 -- Metrics history table
 create table metrics_history (
-    timestamp timestamptz not null primary key,
+    id bigint primary key generated always as identity,
+    timestamp timestamptz not null,
     account_value numeric not null,
     total_position_value numeric not null,
     total_unrealized_pnl numeric not null,
@@ -82,25 +96,26 @@ create table metrics_history (
     concentration_score numeric not null
 );
 
--- Closed trades table
-create table closed_trades (
+-- Fills history table
+create table fills_history (
     id bigint primary key generated always as identity,
     timestamp timestamptz not null,
     coin text not null,
     side text not null,
     size numeric not null,
-    entry_price numeric not null,
-    exit_price numeric not null,
-    profit numeric not null
+    price numeric not null,
+    closed_pnl numeric not null,
+    fill_id text unique not null,
+    order_id text
 );
 ```
 
 ## Architecture
 
-- `dashboard.py`: Streamlit dashboard interface
+- `dashboard.py`: Streamlit dashboard interface with caching
 - `hyperliquid_positions.py`: Position tracking and API integration
-- `position_logger.py`: Data logging and retrieval
-- `risk.py`: Risk metric calculations
+- `position_logger.py`: Rate-limited data logging and retrieval
+- `hyperliquid_api.py`: Base API client implementation
 
 ## Contributing
 

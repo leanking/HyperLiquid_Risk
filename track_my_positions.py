@@ -1,4 +1,5 @@
 from hyperliquid_positions import HyperliquidPositionTracker
+from position_logger import PositionLogger
 
 def track_wallet(wallet_address: str):
     tracker = HyperliquidPositionTracker()
@@ -63,4 +64,11 @@ def track_wallet(wallet_address: str):
 if __name__ == "__main__":
     # Your wallet address
     MY_WALLET = "0xC9739116b8759B5a0B5834Ed62E218676EA9776F"
-    track_wallet(MY_WALLET) 
+    
+    # Track positions
+    track_wallet(MY_WALLET)
+    
+    # Run debug info
+    print("\nRunning database diagnostics...")
+    logger = PositionLogger()
+    logger.print_debug_info() 

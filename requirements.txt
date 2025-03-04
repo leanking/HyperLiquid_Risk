@@ -6,6 +6,7 @@ supabase>=1.0.3
 # Dashboard and visualization
 streamlit>=1.24.0
 plotly>=5.18.0
+watchdog>=3.0.0  # Optional: For better performance
 
 # Data processing and analysis
 numpy>=1.24.0
@@ -27,3 +28,6 @@ pytest-asyncio>=0.21.1
 # Development tools
 black>=23.9.1
 flake8>=6.1.0
+
+# Optional: System monitoring
+psutil>=5.9.0

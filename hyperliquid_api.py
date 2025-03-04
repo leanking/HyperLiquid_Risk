@@ -131,3 +131,30 @@ class HyperliquidAPI:
             return result
         except (TypeError, ValueError):
             return 0.0 
+    
+    def get_user_fills(self, wallet_address: str) -> List[Dict]:
+        """
+        Fetch user's historical fills from Hyperliquid API
+        
+        Args:
+            wallet_address (str): User's wallet address
+            
+        Returns:
+            List[Dict]: List of fill data including closedPnl
+            
+        Raises:
+            HyperliquidAPIError: If the API request fails
+        """
+        endpoint = f"{self.base_url}/info"
+        payload = {
+            "type": "userFills",
+            "user": wallet_address
+        }
+        
+        try:
+            data = self._make_request(endpoint, payload)
+            if not isinstance(data, list):
+                raise HyperliquidAPIError("Invalid response format: expected array")
+            return data
+        except Exception as e:
+            raise HyperliquidAPIError(f"Failed to fetch user fills: {str(e)}") 
