@@ -13,11 +13,41 @@ tracker = HyperliquidPositionTracker()
 logger = PositionLogger()
 
 def create_position_chart(position_history, metric='unrealized_pnl'):
+    # Normalize coin names to uppercase
+    position_history['coin'] = position_history['coin'].str.upper()
+    
     fig = px.line(position_history, 
                   x='timestamp', 
                   y=metric, 
                   color='coin',
                   title=f'Position {metric.replace("_", " ").title()} Over Time')
+    
+    # Enhance the chart appearance with dark mode
+    fig.update_layout(
+        plot_bgcolor='rgb(17,17,17)',
+        paper_bgcolor='rgb(17,17,17)',
+        font_color='white',
+        xaxis=dict(
+            showgrid=True,
+            gridwidth=1,
+            gridcolor='rgba(128,128,128,0.2)',
+            color='white'
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridwidth=1,
+            gridcolor='rgba(128,128,128,0.2)',
+            tickprefix='$',
+            color='white'
+        ),
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01,
+            font=dict(color='white')
+        )
+    )
     return fig
 
 def create_metrics_chart(metrics_history, metric):
@@ -25,6 +55,91 @@ def create_metrics_chart(metrics_history, metric):
                   x='timestamp', 
                   y=metric,
                   title=f'{metric.replace("_", " ").title()} Over Time')
+    
+    # Enhance the chart appearance with dark mode
+    fig.update_layout(
+        plot_bgcolor='rgb(17,17,17)',
+        paper_bgcolor='rgb(17,17,17)',
+        font_color='white',
+        xaxis=dict(
+            showgrid=True,
+            gridwidth=1,
+            gridcolor='rgba(128,128,128,0.2)',
+            color='white'
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridwidth=1,
+            gridcolor='rgba(128,128,128,0.2)',
+            tickprefix='$' if 'pnl' in metric.lower() or 'value' in metric.lower() else '',
+            color='white'
+        )
+    )
+    return fig
+
+def create_combined_pnl_chart(position_history):
+    # Normalize coin names to uppercase
+    position_history['coin'] = position_history['coin'].str.upper()
+    
+    # Group by timestamp and sum PnL across all coins
+    combined_pnl = position_history.groupby('timestamp').agg({
+        'unrealized_pnl': 'sum',
+        'realized_pnl': 'sum',
+        'closed_trade_pnl': 'sum'  # Add closed trade PnL
+    }).reset_index()
+    
+    # Calculate total PnL including closed trades
+    combined_pnl['realized_pnl'] = combined_pnl['realized_pnl'] + combined_pnl['closed_trade_pnl']
+    combined_pnl['total_pnl'] = combined_pnl['unrealized_pnl'] + combined_pnl['realized_pnl']
+    
+    fig = go.Figure()
+    
+    # Add traces for each PnL type
+    fig.add_trace(go.Scatter(
+        x=combined_pnl['timestamp'],
+        y=combined_pnl['unrealized_pnl'],
+        name='Unrealized PnL',
+        line=dict(color='#00B5FF')  # Bright blue
+    ))
+    fig.add_trace(go.Scatter(
+        x=combined_pnl['timestamp'],
+        y=combined_pnl['realized_pnl'],
+        name='Realized PnL',
+        line=dict(color='#00FF9F')  # Bright green
+    ))
+    fig.add_trace(go.Scatter(
+        x=combined_pnl['timestamp'],
+        y=combined_pnl['total_pnl'],
+        name='Total PnL',
+        line=dict(color='#FF00E4')  # Bright purple
+    ))
+    
+    fig.update_layout(
+        title='Combined PnL Over Time',
+        plot_bgcolor='rgb(17,17,17)',
+        paper_bgcolor='rgb(17,17,17)',
+        font_color='white',
+        xaxis=dict(
+            showgrid=True,
+            gridwidth=1,
+            gridcolor='rgba(128,128,128,0.2)',
+            color='white'
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridwidth=1,
+            gridcolor='rgba(128,128,128,0.2)',
+            tickprefix='$',
+            color='white'
+        ),
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01,
+            font=dict(color='white')
+        )
+    )
     return fig
 
 def main():
@@ -81,6 +196,18 @@ def main():
         current_time = datetime.now()
         logger.log_positions(positions, current_time)
         logger.log_metrics(risk_metrics, summary, current_time)
+        
+        # Check for any closed positions and log them
+        for position in positions:
+            if hasattr(position, 'realized_pnl') and position.realized_pnl != 0:
+                logger.log_closed_trade({
+                    'coin': position.coin,
+                    'side': position.side,
+                    'size': position.size,
+                    'entry_price': position.entry_price,
+                    'exit_price': position.last_price if hasattr(position, 'last_price') else position.entry_price,
+                    'profit': position.realized_pnl
+                }, current_time)
         
         # Display Account Summary
         with col1:
@@ -142,17 +269,18 @@ def main():
         
         # Display Charts
         st.subheader("Historical Charts")
-        tab1, tab2, tab3 = st.tabs(["PnL", "Account Metrics", "Risk Metrics"])
+        tab1, tab2, tab3 = st.tabs(["PnL Charts", "Account Metrics", "Risk Metrics"])
         
         with tab1:
             try:
                 position_history = logger.get_position_history(timeframe=timedelta(hours=24))
                 if not position_history.empty:
-                    st.plotly_chart(create_position_chart(position_history, 'unrealized_pnl'))
+                    st.plotly_chart(create_combined_pnl_chart(position_history), use_container_width=True)
+                    st.plotly_chart(create_position_chart(position_history, 'unrealized_pnl'), use_container_width=True)
                 else:
                     st.info("No historical position data available yet")
             except Exception as e:
-                st.error(f"Error displaying PnL chart: {str(e)}")
+                st.error(f"Error displaying PnL charts: {str(e)}")
         
         with tab2:
             try:
