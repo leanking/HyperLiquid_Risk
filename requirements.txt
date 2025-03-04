@@ -1,32 +1,24 @@
 # Core dependencies
 python-dotenv>=1.0.0
 pyyaml>=6.0.1
+supabase>=1.0.3
 
-# API and WebSocket
-aiohttp>=3.9.1
-websockets>=12.0
+# Dashboard and visualization
+streamlit>=1.24.0
+plotly>=5.18.0
 
 # Data processing and analysis
 numpy>=1.24.0
 pandas>=2.1.0
 scipy>=1.11.0
 
-# Dashboard and visualization
-dash>=2.14.0
-plotly>=5.18.0
-dash-bootstrap-components>=1.5.0
-
 # Time handling
 pytz>=2023.3
 python-dateutil>=2.8.2
 
-# Async support
-asyncio>=3.4.3
-
-# Optional alert integrations
-discord.py>=2.3.2
-python-telegram-bot>=20.7
-smtplib3>=0.0.1
+# API and WebSocket
+aiohttp>=3.9.1
+websockets>=12.0
 
 # Testing
 pytest>=7.4.0
