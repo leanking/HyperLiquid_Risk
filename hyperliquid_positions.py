@@ -53,7 +53,7 @@ class HyperliquidPositionTracker(HyperliquidAPI):
             List[HyperliquidPosition]: List of current open positions
         """
         try:
-            response = self._make_request(f"{self.base_url}/info", {
+            response = self._make_request("POST", "/info", json={
                 "type": "clearinghouseState",
                 "user": wallet_address
             })
@@ -123,7 +123,7 @@ class HyperliquidPositionTracker(HyperliquidAPI):
             Dict: Account summary information
         """
         try:
-            response = self._make_request(f"{self.base_url}/info", {
+            response = self._make_request("POST", "/info", json={
                 "type": "clearinghouseState",
                 "user": wallet_address
             })
