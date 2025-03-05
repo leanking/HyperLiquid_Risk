@@ -33,6 +33,15 @@ class HyperliquidPositionTracker(HyperliquidAPI):
             'max_correlation': 0.7           # Maximum correlation between positions
         }
 
+    def _safe_float(self, value, default=0.0):
+        """Safely convert value to float, returning default if conversion fails"""
+        try:
+            if value is None:
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     def get_user_positions(self, wallet_address: str) -> List[HyperliquidPosition]:
         """
         Fetch all open positions for a given wallet address
@@ -44,7 +53,7 @@ class HyperliquidPositionTracker(HyperliquidAPI):
             List[HyperliquidPosition]: List of current open positions
         """
         try:
-            response = self._make_request(f"{self.base_url}/info", {
+            response = self._make_request("POST", "/info", json={
                 "type": "clearinghouseState",
                 "user": wallet_address
             })
@@ -64,23 +73,23 @@ class HyperliquidPositionTracker(HyperliquidAPI):
                         coin = position_data.get('coin', '')
                         
                         # Get size from szi (size information)
-                        size = float(position_data.get('szi', 0))
+                        size = self._safe_float(position_data.get('szi', 0))
                         if size == 0:
                             continue
 
                         # Determine side based on szi value
                         side = 'short' if size < 0 else 'long'
                         
-                        # Get leverage value from the leverage object
+                        # Get leverage value safely
                         leverage_data = position_data.get('leverage', {})
-                        leverage = float(leverage_data.get('value', 0)) if isinstance(leverage_data, dict) else 0
+                        leverage = self._safe_float(leverage_data.get('value', 0)) if isinstance(leverage_data, dict) else 0
                         
-                        # Get other position details including realized PnL
-                        entry_price = float(position_data.get('entryPx', 0))
-                        liquidation_price = float(position_data.get('liquidationPx', 0))
-                        margin_used = float(position_data.get('marginUsed', 0))
-                        unrealized_pnl = float(position_data.get('unrealizedPnl', 0))
-                        realized_pnl = float(position_data.get('realizedPnl', 0))  # Add realized PnL
+                        # Get other position details with safe conversion
+                        entry_price = self._safe_float(position_data.get('entryPx'))
+                        liquidation_price = self._safe_float(position_data.get('liquidationPx'))
+                        margin_used = self._safe_float(position_data.get('marginUsed'))
+                        unrealized_pnl = self._safe_float(position_data.get('unrealizedPnl'))
+                        realized_pnl = self._safe_float(position_data.get('realizedPnl'))
 
                         positions.append(HyperliquidPosition(
                             coin=coin,
@@ -90,11 +99,11 @@ class HyperliquidPositionTracker(HyperliquidAPI):
                             entry_price=entry_price,
                             liquidation_price=liquidation_price,
                             unrealized_pnl=unrealized_pnl,
-                            realized_pnl=realized_pnl,  # Add realized PnL
+                            realized_pnl=realized_pnl,
                             margin_used=margin_used,
                             timestamp=datetime.fromtimestamp(response.get('time', 0) / 1000)
                         ))
-                    except (KeyError, ValueError, TypeError) as e:
+                    except Exception as e:
                         print(f"Warning: Failed to parse position for {coin}: {str(e)}")
                         continue
             
@@ -114,22 +123,24 @@ class HyperliquidPositionTracker(HyperliquidAPI):
             Dict: Account summary information
         """
         try:
-            response = self._make_request(f"{self.base_url}/info", {
+            response = self._make_request("POST", "/info", json={
                 "type": "clearinghouseState",
                 "user": wallet_address
             })
             
             # Get margin summary from response
             margin_summary = response.get('marginSummary', {})
-            cross_margin_summary = response.get('crossMarginSummary', {})
             
             # Calculate total unrealized PnL from all positions
             total_unrealized_pnl = 0
+            total_realized_pnl = 0
             for asset_position in response.get('assetPositions', []):
                 if 'position' in asset_position:
                     position = asset_position['position']
                     unrealized_pnl = float(position.get('unrealizedPnl', 0))
+                    realized_pnl = float(position.get('realizedPnl', 0))
                     total_unrealized_pnl += unrealized_pnl
+                    total_realized_pnl += realized_pnl
 
             # Calculate account leverage
             total_ntl_pos = float(margin_summary.get('totalNtlPos', 0))
@@ -144,6 +155,7 @@ class HyperliquidPositionTracker(HyperliquidAPI):
                 "position_count": len(response.get('assetPositions', [])),
                 "withdrawable": float(response.get('withdrawable', 0)),
                 "total_unrealized_pnl": total_unrealized_pnl,
+                "total_realized_pnl": total_realized_pnl,
                 "account_leverage": account_leverage
             }
             
@@ -338,6 +350,7 @@ def main():
         print(f"Total Position Value: ${summary['total_position_value']:,.2f}")
         print(f"Total Margin Used: ${summary['total_margin_used']:,.2f}")
         print(f"Total Unrealized PnL: ${summary['total_unrealized_pnl']:,.2f}")
+        print(f"Total Realized PnL: ${summary['total_realized_pnl']:,.2f}")
         print(f"Account Value: ${summary['account_value']:,.2f}")
         print(f"Account Leverage: {summary['account_leverage']:.2f}x")
         print(f"Withdrawable: ${summary['withdrawable']:,.2f}")
