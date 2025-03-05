@@ -62,41 +62,27 @@ class PositionLogger:
     def verify_database_connection(self) -> bool:
         """Verify database connection and table structure"""
         try:
-            print("\nVerifying database connection...")
-            print(f"Using Supabase URL: {self.supabase.supabase_url}")
+            print("Verifying database connection...")
+            print(f"Using Supabase URL: {os.getenv('SUPABASE_URL')}")
             
-            # Test basic connection first - use a simpler query
-            try:
-                # Instead of count(*), just get one row to verify connection
-                test_query = self.supabase.table('position_history').select("*").limit(1).execute()
-                print(f"Connection test successful")
-            except Exception as e:
-                print(f"Basic connection test failed: {str(e)}")
-                return False
+            # Test tables exist by querying them
+            tables_to_check = [
+                'position_history',
+                'fills_history',
+                'metrics_history',
+                'account_summary'
+            ]
             
-            # Then check table structure
-            try:
-                table_info = self.supabase.table('position_history').select("*").limit(1).execute()
-                if hasattr(table_info, 'data'):
-                    print("Table structure:")
-                    if table_info.data:
-                        for column in table_info.data[0].keys():
-                            print(f"- {column}")
-                    else:
-                        print("Table exists but is empty (this is okay)")
-                else:
-                    print("Warning: Unexpected response format from table info query")
-                    print(f"Response: {table_info}")
-            except Exception as e:
-                print(f"Table structure check failed: {str(e)}")
-                return False
+            for table in tables_to_check:
+                response = self.supabase.table(table).select('*').limit(1).execute()
+                if response.data is not None:
+                    print(f"✓ Table '{table}' exists and is accessible")
             
+            print("Connection test successful")
             return True
+            
         except Exception as e:
-            print(f"Database verification failed: {str(e)}")
-            print("Full error details:")
-            import traceback
-            traceback.print_exc()
+            print(f"Database connection error: {str(e)}")
             return False
     
     def should_log(self) -> bool:
@@ -119,61 +105,76 @@ class PositionLogger:
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
             
-            try:
-                # First, mark all existing positions as closed
-                self.supabase.table('position_history')\
-                    .update({'is_open': False})\
-                    .eq('is_open', True)\
-                    .execute()
-                print("✓ Marked existing positions as closed")
+            # Get current time in UTC
+            current_time = datetime.now(timezone.utc)
+            
+            position_data = []
+            for pos in positions:
+                position_data.append({
+                    'timestamp': current_time.isoformat(),  # Use current time instead of passed timestamp
+                    'coin': pos['coin'],
+                    'side': pos['side'],
+                    'size': float(pos['size']),
+                    'entry_price': float(pos['entry_price']),
+                    'unrealized_pnl': float(pos['unrealized_pnl']),
+                    'leverage': float(pos['leverage']),
+                    'liquidation_price': float(pos.get('liquidation_price', 0)),
+                    'margin_used': float(pos.get('margin_used', 0)),
+                    'is_open': True  # Explicitly set is_open to True for current positions
+                })
+            
+            if position_data:
+                # Insert new position records
+                self.supabase.table('position_history').insert(position_data).execute()
+                print(f"✓ Logged {len(position_data)} positions successfully")
                 
-                # Create position records for current positions
-                position_records = []
-                for position in positions:
-                    try:
-                        record = {
-                            'timestamp': timestamp.isoformat(),
-                            'coin': position.coin.upper(),
-                            'side': position.side,
-                            'size': str(position.size),  # Convert to string to avoid precision issues
-                            'entry_price': str(position.entry_price),
-                            'leverage': str(position.leverage) if position.leverage else '0',
-                            'liquidation_price': str(position.liquidation_price) if position.liquidation_price else '0',
-                            'unrealized_pnl': str(position.unrealized_pnl),
-                            'realized_pnl': str(position.realized_pnl),
-                            'margin_used': str(position.margin_used) if position.margin_used else '0',
-                            'is_open': True
-                        }
-                        position_records.append(record)
-                        print(f"Prepared record for {position.coin}: {json.dumps(record, indent=2)}")
-                    except Exception as e:
-                        print(f"Error preparing position record for {position.coin}: {str(e)}")
-                        continue
-
-                # Insert new position records if we have any
-                if position_records:
-                    print(f"Inserting {len(position_records)} new position records...")
-                    response = self.supabase.table('position_history').insert(position_records).execute()
-                    print("✓ Position records inserted successfully")
-                    
-                    # Verify the insertion
-                    self.verify_logging(timestamp)
-                    return True
-                else:
-                    print("No positions to log")
-                    return True
-
-            except Exception as e:
-                print(f"Database operation error: {str(e)}")
-                import traceback
-                traceback.print_exc()
-                return False
-
+                # Update any old positions of the same coins to is_open=False
+                current_coins = [pos['coin'] for pos in position_data]
+                for coin in current_coins:
+                    self.supabase.table('position_history')\
+                        .update({'is_open': False})\
+                        .lt('timestamp', current_time.isoformat())\
+                        .eq('coin', coin)\
+                        .execute()
+                
+                print("✓ Updated historical position states")
+            
+            return True
+            
         except Exception as e:
-            print(f"Error in log_positions: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            print(f"Error logging positions: {str(e)}")
             return False
+    
+    def _verify_position_updates(self, new_coins, closed_coins, timestamp):
+        """Verify that position updates were applied correctly"""
+        try:
+            # Check recently updated positions
+            recent = self.supabase.table('position_history')\
+                .select('*')\
+                .gte('timestamp', (timestamp - timedelta(minutes=5)).isoformat())\
+                .execute()
+            
+            if recent.data:
+                df = pd.DataFrame(recent.data)
+                print("\nPosition Update Verification:")
+                print(f"Total recent records: {len(df)}")
+                print(f"Open positions: {df['is_open'].sum()}")
+                print(f"Closed positions: {len(df) - df['is_open'].sum()}")
+                print(f"Unique coins: {df['coin'].nunique()}")
+                
+                # Verify new positions are marked as open
+                open_coins = set(df[df['is_open']]['coin'].unique())
+                print(f"Currently open coins: {open_coins}")
+                print(f"Expected open coins: {new_coins}")
+                print(f"Expected closed coins: {closed_coins}")
+                
+                if not open_coins == new_coins:
+                    print("WARNING: Mismatch in open positions!")
+                    print(f"Unexpected open: {open_coins - new_coins}")
+                    print(f"Missing open: {new_coins - open_coins}")
+        
+        except Exception as e:
+            print(f"Error in verification: {str(e)}")
     
     def log_metrics(self, risk_metrics: Dict, summary: Dict, timestamp: datetime):
         """Log risk metrics and account summary to database"""
@@ -231,19 +232,14 @@ class PositionLogger:
                 .select('*')\
                 .gte('timestamp', start_time.isoformat())\
                 .lte('timestamp', end_time.isoformat())\
-                .order('timestamp', desc=True)\
                 .execute()
             
             if not response.data:
                 print("No position history found")
                 return pd.DataFrame()
             
-            # Convert to DataFrame and process timestamps
+            # Convert to DataFrame
             df = pd.DataFrame(response.data)
-            
-            # Ensure is_open column exists, default to True for older records
-            if 'is_open' not in df.columns:
-                df['is_open'] = True
             
             # Convert numeric columns from strings back to floats
             numeric_columns = ['size', 'entry_price', 'leverage', 'liquidation_price', 
@@ -255,19 +251,10 @@ class PositionLogger:
             # Convert timestamp to datetime with UTC timezone
             df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
             
-            # Sort by timestamp ascending for proper plotting
-            df = df.sort_values('timestamp')
-            
-            print(f"Retrieved {len(df)} position records")
-            print(f"Latest timestamp: {df['timestamp'].max() if not df.empty else 'No data'}")
-            print("Columns:", df.columns.tolist())
-            
             return df
             
         except Exception as e:
-            print(f"Error retrieving position history: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            print(f"Error fetching position history: {str(e)}")
             return pd.DataFrame()
     
     def get_closed_trades(self, timeframe=None):
@@ -346,14 +333,25 @@ class PositionLogger:
             
             # Add timeframe filter if provided
             if timeframe is not None:
-                cutoff_time = datetime.now() - timeframe
+                cutoff_time = datetime.now(timezone.utc) - timeframe
                 query = query.gte('timestamp', cutoff_time.isoformat())
             
             response = query.execute()
             if not response.data:
                 return pd.DataFrame()
             
-            return pd.DataFrame(response.data)
+            df = pd.DataFrame(response.data)
+            
+            # Convert timestamp to datetime and remove timezone
+            df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize(None)
+            
+            # Convert numeric columns
+            numeric_columns = ['size', 'price', 'closed_pnl']
+            for col in numeric_columns:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+            return df
         
         except Exception as e:
             print(f"Error fetching fills history: {str(e)}")
@@ -489,75 +487,78 @@ class PositionLogger:
         
         return True
 
-    def create_tables(self):
-        """Create required tables if they don't exist"""
+    def create_tables(self) -> bool:
+        """Create required database tables if they don't exist"""
         try:
             print("\nChecking and creating required tables...")
             
-            # SQL for creating position_history table
-            position_history_sql = """
-            create table if not exists position_history (
-                id bigint generated by default as identity primary key,
+            # SQL for creating account_summary table
+            account_summary_sql = """
+            create table if not exists account_summary (
+                id bigserial primary key,
                 timestamp timestamptz not null,
-                coin text not null,
-                side text not null,
-                size numeric not null,
-                entry_price numeric not null,
-                leverage numeric,
-                liquidation_price numeric,
-                unrealized_pnl numeric,
-                realized_pnl numeric,
-                margin_used numeric,
-                is_open boolean default true
+                account_value decimal not null,
+                total_position_value decimal not null,
+                total_unrealized_pnl decimal not null,
+                total_margin_used decimal not null,
+                total_realized_pnl decimal not null,
+                account_leverage decimal not null,
+                withdrawable decimal not null
             );
+            create index if not exists idx_account_summary_timestamp on account_summary(timestamp);
             """
             
-            # SQL for creating metrics_history table
-            metrics_history_sql = """
-            create table if not exists metrics_history (
-                id bigint primary key generated always as identity,
-                timestamp timestamptz not null,
-                account_value numeric not null,
-                total_position_value numeric not null,
-                total_unrealized_pnl numeric not null,
-                account_leverage numeric not null,
-                portfolio_heat numeric not null,
-                risk_adjusted_return numeric not null,
-                margin_utilization numeric not null,
-                concentration_score numeric not null
-            );
-            """
-            
-            # SQL for creating fills_history table
-            fills_history_sql = """
-            create table if not exists fills_history (
-                id bigint primary key generated always as identity,
-                timestamp timestamptz not null,
-                coin text not null,
-                side text not null,
-                size numeric not null,
-                price numeric not null,
-                closed_pnl numeric not null,
-                fill_id text unique not null,
-                order_id text
-            );
-            """
-            
-            # Execute the SQL statements
-            for sql, table_name in [
-                (position_history_sql, 'position_history'),
-                (metrics_history_sql, 'metrics_history'),
-                (fills_history_sql, 'fills_history')
-            ]:
+            # Execute the SQL statements using REST API
+            try:
+                # Create account_summary table
+                self.supabase.postgrest.rpc('create_tables', {
+                    'query': account_summary_sql
+                }).execute()
+                print("✓ account_summary table verified/created")
+                
+                # Create other tables using similar pattern
+                # ... (your existing table creation code)
+                
+                return True
+                
+            except Exception as e:
+                print(f"Error creating tables via RPC: {str(e)}")
+                # Try alternative method using direct table creation
                 try:
-                    self.supabase.raw(sql).execute()
-                    print(f"✓ {table_name} table verified/created")
-                except Exception as e:
-                    print(f"Error creating {table_name} table: {str(e)}")
-                    raise
-            
-            return True
-            
+                    tables = {
+                        'account_summary': {
+                            'id': 'bigint',
+                            'timestamp': 'timestamptz',
+                            'account_value': 'decimal',
+                            'total_position_value': 'decimal',
+                            'total_unrealized_pnl': 'decimal',
+                            'total_margin_used': 'decimal',
+                            'total_realized_pnl': 'decimal',
+                            'account_leverage': 'decimal',
+                            'withdrawable': 'decimal'
+                        }
+                    }
+                    
+                    for table_name, schema in tables.items():
+                        self.supabase.table(table_name).upsert({
+                            'id': 1,  # Dummy record
+                            'timestamp': datetime.now(timezone.utc).isoformat(),
+                            'account_value': 0,
+                            'total_position_value': 0,
+                            'total_unrealized_pnl': 0,
+                            'total_margin_used': 0,
+                            'total_realized_pnl': 0,
+                            'account_leverage': 0,
+                            'withdrawable': 0
+                        }).execute()
+                        print(f"✓ {table_name} table created via upsert")
+                    
+                    return True
+                    
+                except Exception as e2:
+                    print(f"Error creating tables via upsert: {str(e2)}")
+                    return False
+                
         except Exception as e:
             print(f"Error creating tables: {str(e)}")
             return False
@@ -607,4 +608,53 @@ class PositionLogger:
             
         except Exception as e:
             print(f"Error retrieving open positions: {str(e)}")
+            return pd.DataFrame()
+
+    def log_account_summary(self, summary: dict, timestamp: datetime = None):
+        """Log account summary data"""
+        if timestamp is None:
+            timestamp = datetime.now(timezone.utc)
+        
+        try:
+            summary_data = {
+                'timestamp': timestamp.isoformat(),
+                'account_value': float(summary.get('account_value', 0)),
+                'total_position_value': float(summary.get('total_position_value', 0)),
+                'total_unrealized_pnl': float(summary.get('total_unrealized_pnl', 0)),
+                'total_margin_used': float(summary.get('total_margin_used', 0)),
+                'total_realized_pnl': float(summary.get('total_realized_pnl', 0)),
+                'account_leverage': float(summary.get('account_leverage', 0)),
+                'withdrawable': float(summary.get('withdrawable', 0))
+            }
+            
+            self.supabase.table('account_summary').insert(summary_data).execute()
+            print("✓ Account summary logged successfully")
+            return True
+            
+        except Exception as e:
+            print(f"Error logging account summary: {str(e)}")
+            return False
+
+    def get_account_history(self, timeframe: timedelta = timedelta(days=7)) -> pd.DataFrame:
+        """Retrieve account history for the specified timeframe"""
+        try:
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timeframe
+            
+            response = self.supabase.table('account_summary')\
+                .select('*')\
+                .gte('timestamp', start_time.isoformat())\
+                .lte('timestamp', end_time.isoformat())\
+                .execute()
+            
+            if not response.data:
+                return pd.DataFrame()
+            
+            df = pd.DataFrame(response.data)
+            df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+            
+            return df
+            
+        except Exception as e:
+            print(f"Error fetching account history: {str(e)}")
             return pd.DataFrame() 

@@ -8,6 +8,12 @@ from position_logger import PositionLogger
 import plotly.express as px
 from streamlit import cache_data, cache_resource
 from dataclasses import asdict
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+DEFAULT_WALLET = os.getenv('WALLET_ADDRESS')
 
 # Initialize
 st.set_page_config(page_title="Hyperliquid Position Monitor", layout="wide")
@@ -39,13 +45,26 @@ def create_position_chart(position_history, metric='unrealized_pnl'):
         # Convert timestamp to UTC and remove timezone info for consistent comparison
         position_history['timestamp'] = pd.to_datetime(position_history['timestamp']).dt.tz_localize(None)
         
+        # If is_open column doesn't exist, create it based on latest timestamps
+        if 'is_open' not in position_history.columns:
+            latest_timestamps = position_history.groupby('coin')['timestamp'].transform('max')
+            position_history['is_open'] = (position_history['timestamp'] == latest_timestamps)
+        
         # Filter for only open positions
-        open_positions = position_history[position_history['is_open'] == True]
+        open_positions = position_history[position_history['is_open'] == True].copy()
         if open_positions.empty:
+            print("No open positions found in data")
             return None
             
         # Normalize coin names to uppercase
         open_positions['coin'] = open_positions['coin'].str.upper()
+        
+        # Ensure numeric type for the metric column
+        open_positions[metric] = pd.to_numeric(open_positions[metric], errors='coerce')
+        
+        print(f"\nPlotting {len(open_positions)} open position records")
+        print(f"Time range: {open_positions['timestamp'].min()} to {open_positions['timestamp'].max()}")
+        print(f"Coins: {open_positions['coin'].unique().tolist()}")
         
         fig = px.line(open_positions, 
                      x='timestamp', 
@@ -75,6 +94,7 @@ def create_position_chart(position_history, metric='unrealized_pnl'):
         return fig
     except Exception as e:
         print(f"Error creating position chart: {str(e)}")
+        print("Position history columns:", position_history.columns.tolist())
         st.error(f"Chart error: {str(e)}")
         return None
 
@@ -110,54 +130,55 @@ def create_combined_pnl_chart(position_history):
         return None
         
     try:
-        # Ensure timestamp is datetime and remove any timezone info
-        position_history['timestamp'] = pd.to_datetime(position_history['timestamp']).dt.tz_localize(None)
-        
-        # Sort by timestamp and remove any duplicates
-        position_history = position_history.sort_values('timestamp')
-        position_history = position_history.drop_duplicates(subset=['timestamp', 'coin'])
+        # Ensure timestamp is datetime
+        position_history['timestamp'] = pd.to_datetime(position_history['timestamp'])
         
         # Group by timestamp and calculate metrics
-        combined_pnl = position_history.groupby('timestamp').agg({
+        combined_pnl = position_history.groupby('timestamp', as_index=False).agg({
             'unrealized_pnl': 'sum',
-            'realized_pnl': 'max'  # Take the max value since it's cumulative
-        }).reset_index()
+            'realized_pnl': 'last'  # Take last value since it's cumulative
+        })
         
         # Calculate total PnL
         combined_pnl['total_pnl'] = combined_pnl['unrealized_pnl'] + combined_pnl['realized_pnl']
         
-        # Debug info
-        print("Combined PnL shape:", combined_pnl.shape)
-        print("Timestamp range:", combined_pnl['timestamp'].min(), "to", combined_pnl['timestamp'].max())
-        print("Realized PnL range:", combined_pnl['realized_pnl'].min(), "to", combined_pnl['realized_pnl'].max())
+        # Apply smoothing to reduce noise
+        window = '10min'
+        combined_pnl.set_index('timestamp', inplace=True)
+        combined_pnl['unrealized_pnl'] = combined_pnl['unrealized_pnl'].rolling(window=window, center=True, min_periods=1).mean()
+        combined_pnl['total_pnl'] = combined_pnl['total_pnl'].rolling(window=window, center=True, min_periods=1).mean()
+        combined_pnl.reset_index(inplace=True)
         
         fig = go.Figure()
         
-        # Add traces for each PnL type
+        # Add traces with improved styling
         fig.add_trace(go.Scatter(
             x=combined_pnl['timestamp'],
             y=combined_pnl['unrealized_pnl'],
             name='Unrealized PnL',
-            line=dict(color='#00B5FF', width=2)
+            line=dict(color='#00B5FF', width=2, shape='spline'),
+            mode='lines'
         ))
         
         fig.add_trace(go.Scatter(
             x=combined_pnl['timestamp'],
             y=combined_pnl['realized_pnl'],
             name='Realized PnL',
-            line=dict(color='#00FF9F', width=2)
+            line=dict(color='#00FF9F', width=2, shape='spline'),
+            mode='lines'
         ))
         
         fig.add_trace(go.Scatter(
             x=combined_pnl['timestamp'],
             y=combined_pnl['total_pnl'],
             name='Total PnL',
-            line=dict(color='#FF00E4', width=2)
+            line=dict(color='#FF00E4', width=2, shape='spline'),
+            mode='lines'
         ))
         
-        # Update layout
+        # Update layout with better styling
         fig.update_layout(
-            title='7-Day PnL Overview',
+            title='PnL Overview',
             plot_bgcolor='rgb(17,17,17)',
             paper_bgcolor='rgb(17,17,17)',
             font_color='white',
@@ -166,7 +187,8 @@ def create_combined_pnl_chart(position_history):
                 gridwidth=1,
                 gridcolor='rgba(128,128,128,0.2)',
                 color='white',
-                title='Time'
+                title='Time',
+                rangeslider=dict(visible=True)
             ),
             yaxis=dict(
                 showgrid=True,
@@ -174,7 +196,10 @@ def create_combined_pnl_chart(position_history):
                 gridcolor='rgba(128,128,128,0.2)',
                 tickprefix='$',
                 color='white',
-                title='PnL ($)'
+                title='PnL ($)',
+                zeroline=True,
+                zerolinecolor='rgba(255,255,255,0.2)',
+                zerolinewidth=1
             ),
             legend=dict(
                 yanchor="top",
@@ -187,15 +212,12 @@ def create_combined_pnl_chart(position_history):
             hovermode='x unified'
         )
         
-        # Add debug info
-        print("Chart Data Points:", len(combined_pnl))
-        print("Time Range:", combined_pnl['timestamp'].min(), "to", combined_pnl['timestamp'].max())
-        print("Realized PnL Range:", combined_pnl['realized_pnl'].min(), "to", combined_pnl['realized_pnl'].max())
-        
         return fig
+        
     except Exception as e:
         print(f"Error creating combined PnL chart: {str(e)}")
-        st.error(f"Chart error: {str(e)}")
+        import traceback
+        traceback.print_exc()  # Add detailed error trace
         return None
 
 # Split the data fetching into smaller, cacheable functions
@@ -251,115 +273,169 @@ def fetch_fills(wallet_address: str):
         st.error(f"Error fetching fills: {str(e)}")
         return None
 
-@st.cache_data(ttl=300)  # Cache historical data for 5 minutes
-def fetch_historical_data(timeframe=timedelta(hours=24)):
+@st.cache_data(ttl=300)
+def fetch_historical_data(timeframe=timedelta(hours=24), wallet_address=None):
     try:
         # Get position history
         position_history = logger.get_position_history(timeframe=timeframe)
-        
-        # Ensure we have the basic position history
         if position_history.empty:
             return pd.DataFrame()
             
-        # Convert timestamps to datetime if they aren't already
-        position_history['timestamp'] = pd.to_datetime(position_history['timestamp'])
+        # Get fills history
+        fills_history = logger.get_fills_history(timeframe=timeframe)
         
-        # If timestamps are naive (no timezone), localize to UTC
-        if position_history['timestamp'].dt.tz is None:
-            position_history['timestamp'] = position_history['timestamp'].dt.tz_localize('UTC')
-        # If timestamps have a different timezone, convert to UTC
-        elif str(position_history['timestamp'].dt.tz) != 'UTC':
-            position_history['timestamp'] = position_history['timestamp'].dt.tz_convert('UTC')
-        
-        # Get current time in UTC
+        # Create regular time series with minute intervals
         now = datetime.now(timezone.utc)
-        seven_days_ago = now - timedelta(days=7)
-        
-        # Remove timezone info after calculations
-        position_history['timestamp'] = position_history['timestamp'].dt.tz_localize(None)
-        now = now.replace(tzinfo=None)
-        seven_days_ago = seven_days_ago.replace(tzinfo=None)
-        
-        # Filter to last 7 days and remove duplicates
-        position_history = position_history[position_history['timestamp'] >= seven_days_ago]
-        position_history = position_history.drop_duplicates(subset=['timestamp', 'coin'])
-        
-        # Initialize realized_pnl column with zeros
-        position_history['realized_pnl'] = 0.0
-        
-        # Get fills history for realized PnL
-        fills_history = logger.get_fills_history(timeframe=timedelta(days=7))
+        start_time = now - timeframe
+        date_range = pd.date_range(
+            start=start_time,
+            end=now,
+            freq='1min',
+            tz='UTC'
+        )
         
         if not fills_history.empty:
-            # Convert fills timestamp to datetime and handle timezone
-            fills_history['timestamp'] = pd.to_datetime(fills_history['timestamp'])
+            # Ensure timestamps are timezone-aware
+            fills_history['timestamp'] = pd.to_datetime(fills_history['timestamp'], utc=True)
             
-            # Handle timezone for fills similar to positions
-            if fills_history['timestamp'].dt.tz is None:
-                fills_history['timestamp'] = fills_history['timestamp'].dt.tz_localize('UTC')
-            elif str(fills_history['timestamp'].dt.tz) != 'UTC':
-                fills_history['timestamp'] = fills_history['timestamp'].dt.tz_convert('UTC')
-                
-            fills_history['timestamp'] = fills_history['timestamp'].dt.tz_localize(None)
-            
-            # Create a complete date range for the last 7 days up to now
-            date_range = pd.date_range(
-                start=seven_days_ago,
-                end=now,
-                freq='h',
-                normalize=False  # Don't normalize to midnight
-            )
-            
-            # Calculate cumulative PnL for each fill
+            # Ensure unique timestamps by grouping and summing closed_pnl
+            fills_history = fills_history.groupby('timestamp')['closed_pnl'].sum().reset_index()
             fills_history = fills_history.sort_values('timestamp')
-            fills_history['cumulative_pnl'] = fills_history['closed_pnl'].cumsum()
             
-            # Create hourly PnL series
-            hourly_pnl = pd.DataFrame({'timestamp': date_range})
+            # Calculate cumulative realized PnL
+            fills_history['realized_pnl'] = fills_history['closed_pnl'].cumsum()
             
-            # Ensure timestamps match exactly by flooring to hours
-            fills_history['timestamp'] = fills_history['timestamp'].dt.floor('h')
-            position_history['timestamp'] = position_history['timestamp'].dt.floor('h')
+            # Resample PnL to regular intervals
+            fills_history.set_index('timestamp', inplace=True)
+            resampled_pnl = fills_history['realized_pnl'].reindex(date_range)
+            sampled_pnl = resampled_pnl.interpolate(method='linear').ffill().fillna(0)
             
-            # Merge with consistent timestamp format
-            hourly_pnl = hourly_pnl.merge(
-                fills_history[['timestamp', 'cumulative_pnl']],
-                on='timestamp',
-                how='left'
-            )
-            hourly_pnl['cumulative_pnl'] = hourly_pnl['cumulative_pnl'].ffill().fillna(0)
+            # Create realized PnL series with timestamp column
+            realized_pnl_series = pd.DataFrame({
+                'timestamp': date_range,
+                'realized_pnl': sampled_pnl
+            }).set_index('timestamp')
             
-            # Merge with position history
-            position_history = position_history.merge(
-                hourly_pnl[['timestamp', 'cumulative_pnl']],
-                on='timestamp',
-                how='left'
-            )
-            position_history['realized_pnl'] = position_history['cumulative_pnl'].ffill().fillna(0)
-            position_history = position_history.drop('cumulative_pnl', axis=1)
+            # Group position history by timestamp and coin, then aggregate
+            agg_dict = {
+                'unrealized_pnl': 'sum',
+                'side': 'first',
+                'size': 'first',
+                'entry_price': 'first',
+                'leverage': 'first',
+                'liquidation_price': 'first',
+                'margin_used': 'first',
+                'is_open': 'max'
+            }
+            
+            # Group by timestamp and coin
+            position_history = position_history.groupby(['timestamp', 'coin']).agg(agg_dict).reset_index()
+            
+            # Convert timezone-aware timestamps to UTC
+            position_history['timestamp'] = pd.to_datetime(position_history['timestamp']).dt.tz_convert('UTC')
+            
+            # Create a copy of position_history with timestamp as index for joining
+            position_history_indexed = position_history.set_index('timestamp')
+            
+            # Join with realized PnL series
+            merged = position_history_indexed.join(realized_pnl_series, how='outer')
+            
+            # Reset index to get timestamp back as a column
+            position_history = merged.reset_index()
+            
+            # Remove timezone info after all operations are complete
+            position_history['timestamp'] = position_history['timestamp'].dt.tz_localize(None)
+            
+            # Sort and fill any missing values
+            position_history = position_history.sort_values('timestamp')
+            position_history['realized_pnl'] = position_history['realized_pnl'].ffill().fillna(0)
+            
+            # Fill NaN values in other columns
+            numeric_cols = position_history.select_dtypes(include=['float64', 'int64']).columns
+            position_history[numeric_cols] = position_history[numeric_cols].fillna(0)
+            
+        else:
+            # Handle case with no fills history
+            position_history['realized_pnl'] = 0.0
+            # Remove timezone info
+            position_history['timestamp'] = position_history['timestamp'].dt.tz_localize(None)
+            
+            if wallet_address is None:
+                wallet_address = DEFAULT_WALLET
+            
+            # Add is_open column if it doesn't exist
+            if 'is_open' not in position_history.columns:
+                position_history['is_open'] = False
+                current_positions = {pos.coin for pos in tracker.get_user_positions(wallet_address)}
+                latest_positions = position_history.sort_values('timestamp').groupby('coin').last()
+                position_history.loc[position_history['coin'].isin(current_positions), 'is_open'] = True
         
-        # Sort by timestamp for consistent display
-        position_history = position_history.sort_values('timestamp')
-        
-        # Add debug info
-        print("\nHistorical Data Debug Info:")
-        print(f"Current UTC time: {now}")
-        print(f"Seven days ago UTC: {seven_days_ago}")
-        print("Position History Shape:", position_history.shape)
-        print("Position History Columns:", position_history.columns.tolist())
-        print("Position History Timestamp dtype:", position_history['timestamp'].dtype)
-        print("Time Range:", position_history['timestamp'].min(), "to", position_history['timestamp'].max())
-        print("Sample timestamps:", position_history['timestamp'].head().tolist())
-        print("Realized PnL Range:", position_history['realized_pnl'].min(), "to", position_history['realized_pnl'].max())
+        # Debug info
+        print("\nProcessed position history:")
+        print(f"Shape: {position_history.shape}")
+        print(f"Columns: {position_history.columns.tolist()}")
+        print(f"Time range: {position_history['timestamp'].min()} to {position_history['timestamp'].max()}")
         
         return position_history
         
     except Exception as e:
         print(f"Error fetching historical data: {str(e)}")
-        print(f"Error type: {type(e)}")
         import traceback
         traceback.print_exc()
         return pd.DataFrame()
+
+def create_account_value_chart(account_history):
+    if account_history.empty:
+        return None
+        
+    try:
+        fig = go.Figure()
+        
+        # Add account value trace
+        fig.add_trace(go.Scatter(
+            x=account_history['timestamp'],
+            y=account_history['account_value'],
+            name='Account Value',
+            line=dict(color='#00FF9F', width=2),
+            mode='lines'
+        ))
+        
+        # Add unrealized PnL trace
+        fig.add_trace(go.Scatter(
+            x=account_history['timestamp'],
+            y=account_history['total_unrealized_pnl'],
+            name='Unrealized PnL',
+            line=dict(color='#00B5FF', width=2),
+            mode='lines'
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            title='Account Value & PnL History',
+            plot_bgcolor='rgb(17,17,17)',
+            paper_bgcolor='rgb(17,17,17)',
+            font_color='white',
+            xaxis=dict(
+                showgrid=True,
+                gridwidth=1,
+                gridcolor='rgba(128,128,128,0.2)',
+                title='Time'
+            ),
+            yaxis=dict(
+                showgrid=True,
+                gridwidth=1,
+                gridcolor='rgba(128,128,128,0.2)',
+                tickprefix='$',
+                title='Value ($)'
+            ),
+            hovermode='x unified'
+        )
+        
+        return fig
+        
+    except Exception as e:
+        print(f"Error creating account value chart: {str(e)}")
+        return None
 
 def main():
     st.title("Hyperliquid Position Monitor")
@@ -368,7 +444,7 @@ def main():
     st.sidebar.header("Configuration")
     wallet_address = st.sidebar.text_input(
         "Wallet Address",
-        value="0xC9739116b8759B5a0B5834Ed62E218676EA9776F"
+        value=DEFAULT_WALLET
     )
     update_interval = st.sidebar.slider(
         "Update Interval (seconds)", 
@@ -412,6 +488,45 @@ def main():
         - Lower values suggest better diversification
         """)
     
+    # Add help expander
+    with st.sidebar.expander("Help"):
+        st.markdown("""
+        ### Risk Metrics Explained
+        
+        ### Portfolio Heat (0-100)
+        Composite risk score based on:
+        - Leverage levels across positions
+        - Distance to liquidation prices
+        - Position concentration
+        - Market volatility
+        
+        Lower values indicate lower risk. Values above 70 suggest high risk exposure.
+        
+        ### Risk-Adjusted Return
+        Measures return per unit of risk (similar to Sharpe ratio):
+        - Higher values indicate better risk-adjusted performance
+        - Calculated using PnL relative to position volatility
+        - Values > 1 suggest good risk-reward balance
+        
+        ### Margin Utilization (%)
+        Percentage of account equity being used as margin:
+        - Higher values mean less free capital
+        - Above 80% indicates high risk of liquidation
+        
+        ### Exposure/Equity Ratio
+        Total position exposure relative to account equity:
+        - Higher values indicate higher leverage
+        - Represents overall account risk
+        - Values > 3 suggest high leverage risk
+        
+        ### Concentration Score (0-100)
+        Measures portfolio diversification:
+        - Based on Herfindahl-Hirschman Index (HHI)
+        - Higher values indicate more concentrated positions
+        - Lower values suggest better diversification
+        - Scores > 50 indicate high concentration risk
+        """)
+    
     # Add debug expander
     with st.sidebar.expander("Debug Info"):
         if st.button("Check Database"):
@@ -428,11 +543,22 @@ def main():
     
     try:
         while True:
-            # Get current timestamp for unique keys
             current_time = datetime.now(timezone.utc)
             unique_timestamp = current_time.strftime('%Y%m%d%H%M%S')
-
+            
+            # Fetch current data
             positions_data = fetch_positions(wallet_address)
+            summary = fetch_summary(wallet_address)
+            
+            if summary:
+                try:
+                    # Log account summary
+                    logger.log_account_summary(summary, current_time)
+                except Exception as e:
+                    print(f"Error logging account summary: {str(e)}")
+                    # Verify database connection
+                    logger.verify_database_connection()
+                    continue
             
             if not positions_data:
                 with metrics_container:
@@ -440,31 +566,7 @@ def main():
                 time.sleep(update_interval)
                 continue
 
-            summary = fetch_summary(wallet_address)
-            if summary is None:
-                with metrics_container:
-                    st.error("Error fetching account summary")
-                time.sleep(update_interval)
-                continue
-
-            # Convert dictionary positions back to HyperliquidPosition objects for logging
-            positions = [
-                HyperliquidPosition(
-                    coin=pos['coin'],
-                    side=pos['side'],
-                    size=pos['size'],
-                    leverage=pos['leverage'],
-                    entry_price=pos['entry_price'],
-                    liquidation_price=pos['liquidation_price'],
-                    unrealized_pnl=pos['unrealized_pnl'],
-                    realized_pnl=pos['realized_pnl'],
-                    margin_used=pos['margin_used'],
-                    timestamp=datetime.fromisoformat(pos['timestamp']) if isinstance(pos['timestamp'], str) else pos['timestamp']
-                )
-                for pos in positions_data
-            ]
-
-            risk_metrics = fetch_risk_metrics(positions, summary['account_value'])
+            risk_metrics = fetch_risk_metrics(positions_data, summary['account_value'])
             fills = fetch_fills(wallet_address)
             seven_day_pnl = logger.get_total_realized_pnl(timeframe=timedelta(days=7))
 
@@ -473,19 +575,35 @@ def main():
                 st.text(f"Last updated: {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
                 
                 col1, col2 = st.columns(2)
+                
                 with col1:
                     st.subheader("Account Summary")
-                    st.metric("Account Value", f"${summary.get('account_value', 0):,.2f}")
-                    st.metric("Total Position Value", f"${summary.get('total_position_value', 0):,.2f}")
-                    st.metric("Unrealized PnL", f"${summary.get('total_unrealized_pnl', 0):,.2f}")
-                    st.metric("7-Day Realized PnL", f"${seven_day_pnl:,.2f}")
+                    col1_1, col1_2 = st.columns(2)
+                    
+                    with col1_1:
+                        st.metric("Account Value", f"${summary.get('account_value', 0):,.2f}")
+                        st.metric("Unrealized PnL", f"${summary.get('total_unrealized_pnl', 0):,.2f}")
+                        st.metric("7-Day PnL", f"${seven_day_pnl:,.2f}")
+                    
+                    with col1_2:
+                        st.metric("Position Value", f"${summary.get('total_position_value', 0):,.2f}")
+                        st.metric("Realized PnL", f"${summary.get('total_realized_pnl', 0):,.2f}")
+                        st.metric("Withdrawable", f"${summary.get('withdrawable', 0):,.2f}")
                 
                 with col2:
                     st.subheader("Risk Metrics")
                     portfolio_risks = risk_metrics.get("portfolio_risks", {})
-                    st.metric("Portfolio Heat", f"{portfolio_risks.get('portfolio_heat', 0):.1f}")
-                    st.metric("Risk-Adjusted Return", f"{portfolio_risks.get('risk_adjusted_return', 0):.2f}")
-                    st.metric("Margin Utilization", f"{portfolio_risks.get('margin_utilization', 0):.1f}%")
+                    col2_1, col2_2 = st.columns(2)
+                    
+                    with col2_1:
+                        st.metric("Portfolio Heat", f"{portfolio_risks.get('portfolio_heat', 0):.1f}")
+                        st.metric("Risk-Adjusted Return", f"{portfolio_risks.get('risk_adjusted_return', 0):.2f}")
+                        st.metric("Margin Utilization", f"{portfolio_risks.get('margin_utilization', 0):.1f}%")
+                    
+                    with col2_2:
+                        st.metric("Exposure/Equity", f"{portfolio_risks.get('exposure_to_equity_ratio', 0):.2f}x")
+                        st.metric("Concentration", f"{portfolio_risks.get('concentration_score', 0):.1f}")
+                        st.metric("Account Leverage", f"{summary.get('account_leverage', 0):.2f}x")
 
             # Update positions table
             with positions_container:
@@ -509,7 +627,7 @@ def main():
 
             # Update charts
             with charts_container:
-                position_history = fetch_historical_data()
+                position_history = fetch_historical_data(wallet_address=wallet_address)
                 if not position_history.empty:
                     st.subheader("Historical Charts")
                     tab1, tab2 = st.tabs(["PnL Charts", "Position Charts"])
@@ -532,19 +650,26 @@ def main():
                                 key=f"position_chart_{unique_timestamp}"  # Make key unique
                             )
 
+                account_history = logger.get_account_history(timeframe=timedelta(hours=24))
+                if not account_history.empty:
+                    st.subheader("Account History")
+                    account_chart = create_account_value_chart(account_history)
+                    if account_chart:
+                        st.plotly_chart(account_chart, use_container_width=True)
+
             # Update the logging section in the main loop
             if current_time.minute % 5 == 0 and current_time.second < 5:
                 try:
                     print("\n=== Starting Logging Process ===")
                     print(f"Current UTC time: {current_time.isoformat()}")
-                    print(f"Number of positions to log: {len(positions)}")
+                    print(f"Number of positions to log: {len(positions_data)}")
                     
                     # Debug position data
-                    for pos in positions:
-                        print(f"Position: {pos.coin} - Size: {pos.size} - Entry: {pos.entry_price}")
+                    for pos in positions_data:
+                        print(f"Position: {pos['coin']} - Size: {pos['size']} - Entry: {pos['entry_price']}")
                     
                     # Now we can pass the proper Position objects to log_positions
-                    logger.log_positions(positions, current_time)
+                    logger.log_positions(positions_data, current_time)
                     
                     if fills:
                         print(f"\nLogging {len(fills)} fills")
