@@ -53,7 +53,7 @@ class HyperliquidPositionTracker(HyperliquidAPI):
             List[HyperliquidPosition]: List of current open positions
         """
         try:
-            response = self._make_request("POST", "/info", json={
+            response = self._make_request(f"{self.base_url}/info", {
                 "type": "clearinghouseState",
                 "user": wallet_address
             })
@@ -123,24 +123,22 @@ class HyperliquidPositionTracker(HyperliquidAPI):
             Dict: Account summary information
         """
         try:
-            response = self._make_request("POST", "/info", json={
+            response = self._make_request(f"{self.base_url}/info", {
                 "type": "clearinghouseState",
                 "user": wallet_address
             })
             
             # Get margin summary from response
             margin_summary = response.get('marginSummary', {})
+            cross_margin_summary = response.get('crossMarginSummary', {})
             
             # Calculate total unrealized PnL from all positions
             total_unrealized_pnl = 0
-            total_realized_pnl = 0
             for asset_position in response.get('assetPositions', []):
                 if 'position' in asset_position:
                     position = asset_position['position']
                     unrealized_pnl = float(position.get('unrealizedPnl', 0))
-                    realized_pnl = float(position.get('realizedPnl', 0))
                     total_unrealized_pnl += unrealized_pnl
-                    total_realized_pnl += realized_pnl
 
             # Calculate account leverage
             total_ntl_pos = float(margin_summary.get('totalNtlPos', 0))
@@ -155,7 +153,6 @@ class HyperliquidPositionTracker(HyperliquidAPI):
                 "position_count": len(response.get('assetPositions', [])),
                 "withdrawable": float(response.get('withdrawable', 0)),
                 "total_unrealized_pnl": total_unrealized_pnl,
-                "total_realized_pnl": total_realized_pnl,
                 "account_leverage": account_leverage
             }
             
@@ -350,7 +347,6 @@ def main():
         print(f"Total Position Value: ${summary['total_position_value']:,.2f}")
         print(f"Total Margin Used: ${summary['total_margin_used']:,.2f}")
         print(f"Total Unrealized PnL: ${summary['total_unrealized_pnl']:,.2f}")
-        print(f"Total Realized PnL: ${summary['total_realized_pnl']:,.2f}")
         print(f"Account Value: ${summary['account_value']:,.2f}")
         print(f"Account Leverage: {summary['account_leverage']:.2f}x")
         print(f"Withdrawable: ${summary['withdrawable']:,.2f}")

@@ -1,18 +1,14 @@
 # Hyperliquid Risk Management Dashboard
 
-A real-time risk monitoring and analytics dashboard for Hyperliquid positions with Streamlit.
+A real-time risk monitoring and analytics dashboard for Hyperliquid positions.
 
 ## Features
 
 - Real-time position monitoring
 - Comprehensive risk metrics
-- Historical data logging with Supabase
-- Interactive dark-mode charts
+- Historical data logging
+- Interactive charts
 - Position and portfolio analytics
-- 7-day realized PnL tracking
-- Rate-limited data logging
-- Timezone-aware data handling
-- Cached API requests for better performance
 
 ## Risk Metrics
 
@@ -30,92 +26,54 @@ A real-time risk monitoring and analytics dashboard for Hyperliquid positions wi
 - Risk Score (0-100)
 - Individual Position Leverage
 - Unrealized PnL
-- 7-Day Realized PnL
-- Total PnL (including closed trades)
 
 ## Installation
 
 1. Install required packages:
-```bash
-pip install -r requirements.txt
-```
+```pip install -r requirements.txt```
 
-2. Set up environment variables in `.env`:
-```env
-SUPABASE_URL=your_supabase_url
-SUPABASE_KEY=your_supabase_key
-```
-
-3. Install Watchdog for better performance (optional):
-```bash
-# On macOS
-xcode-select --install
-pip install watchdog
+2. Configure your API keys in `config.yaml`:
+```yaml
+api_keys:
+  hyperliquid:
+    key: "your_key_here"
+    secret: "your_secret_here"
 ```
 
 ## Usage
 
 1. Start the dashboard:
 ```bash
-streamlit run dashboard.py
+python main.py
 ```
 
-2. Access the dashboard at `http://localhost:8501`
+2. Access the dashboard at `http://localhost:8050`
 
-## Database Setup
+## Configuration
 
-Create the following tables in Supabase:
+Adjust risk thresholds and alerts in `config.yaml`:
 
-```sql
--- Position history table
-create table position_history (
-    id bigint primary key generated always as identity,
-    timestamp timestamptz not null,
-    coin text not null,
-    side text not null,
-    size numeric not null,
-    entry_price numeric not null,
-    leverage numeric,
-    liquidation_price numeric,
-    unrealized_pnl numeric not null,
-    realized_pnl numeric not null,
-    margin_used numeric
-);
+```yaml
+risk_thresholds:
+  portfolio_heat_max: 80
+  leverage_max: 5
+  concentration_max: 0.5
+  liquidation_distance_min: 0.15
 
--- Metrics history table
-create table metrics_history (
-    id bigint primary key generated always as identity,
-    timestamp timestamptz not null,
-    account_value numeric not null,
-    total_position_value numeric not null,
-    total_unrealized_pnl numeric not null,
-    account_leverage numeric not null,
-    portfolio_heat numeric not null,
-    risk_adjusted_return numeric not null,
-    margin_utilization numeric not null,
-    concentration_score numeric not null
-);
-
--- Fills history table
-create table fills_history (
-    id bigint primary key generated always as identity,
-    timestamp timestamptz not null,
-    coin text not null,
-    side text not null,
-    size numeric not null,
-    price numeric not null,
-    closed_pnl numeric not null,
-    fill_id text unique not null,
-    order_id text
-);
+alerts:
+  email: true
+  discord: false
+  telegram: false
 ```
 
 ## Architecture
 
-- `dashboard.py`: Streamlit dashboard interface with caching
-- `hyperliquid_positions.py`: Position tracking and API integration
-- `position_logger.py`: Rate-limited data logging and retrieval
-- `hyperliquid_api.py`: Base API client implementation
+- `main.py`: Dashboard entry point
+- `risk_calculator.py`: Core risk metric calculations
+- `data_fetcher.py`: Real-time market data collection
+- `position_monitor.py`: Position tracking and updates
+- `alert_manager.py`: Risk alert system
+- `utils/`: Helper functions and utilities
 
 ## Contributing
 
