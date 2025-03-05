@@ -19,7 +19,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
+PROJECT_GOALS.md
 # Virtual Environment
 venv/
 <<<<<<< HEAD
