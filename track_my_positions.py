@@ -1,4 +1,6 @@
 from hyperliquid_positions import HyperliquidPositionTracker
+from dotenv import load_dotenv
+import os
 
 def track_wallet(wallet_address: str):
     tracker = HyperliquidPositionTracker()
@@ -61,6 +63,12 @@ def track_wallet(wallet_address: str):
         print(f"Error tracking positions: {str(e)}")
 
 if __name__ == "__main__":
-    # Your wallet address
-    MY_WALLET = "0xC9739116b8759B5a0B5834Ed62E218676EA9776F"
-    track_wallet(MY_WALLET) 
+    # Load environment variables
+    load_dotenv()
+    
+    # Get wallet address from environment
+    wallet_address = os.getenv('WALLET_ADDRESS')
+    if not wallet_address:
+        raise ValueError("WALLET_ADDRESS not found in .env file")
+        
+    track_wallet(wallet_address) 

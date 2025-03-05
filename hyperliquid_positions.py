@@ -7,6 +7,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from hyperliquid_api import HyperliquidAPI, HyperliquidAPIError
 import numpy as np
+from dotenv import load_dotenv
 
 @dataclass
 class HyperliquidPosition:
@@ -317,8 +318,15 @@ class HyperliquidPositionTracker(HyperliquidAPI):
         return suggestions
 
 def main():
+    # Load environment variables
+    load_dotenv()
+    
+    # Get wallet address from environment
+    wallet = os.getenv('WALLET_ADDRESS')
+    if not wallet:
+        raise ValueError("WALLET_ADDRESS not found in .env file")
+    
     tracker = HyperliquidPositionTracker()
-    wallet = "0xC9739116b8759B5a0B5834Ed62E218676EA9776F"
     
     try:
         print("\nFetching positions and calculating risk metrics...")
